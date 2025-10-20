@@ -1,8 +1,10 @@
+internal import System
 import UIKit
 import UniformTypeIdentifiers
-internal import System
+import os
 
-/*
+/* https://blog.tibimac.com/2024/01/resoudre-erreur-exsinkloadoperator-nsitemprovider/
+ L'erreur suivante est normale avec Swift plutôt qu'Objective-C :
  <NSItemProvider: 0x103f35340> {types = (
      "public.url"
  )}
@@ -27,7 +29,24 @@ internal import System
  )}
  */
 
+private let logger = Logger(subsystem: "com.net.fenyo.openinsafari", category: "ShareExtension")
+
 final class ShareViewController: UIViewController {
+
+    // https://medium.com/@damisipikuda/how-to-receive-a-shared-content-in-an-ios-application-4d5964229701
+    // Courtesy: https://stackoverflow.com/a/44499222/13363449
+    // Function must be named exactly like this so a selector can be found by the compiler!
+    // Anyway - it's another selector in another instance that would be "performed" instead.
+    @objc func openURL(_ url: URL) -> Bool {
+        var responder: UIResponder? = self
+        while responder != nil {
+            if let application = responder as? UIApplication {
+                return application.perform(#selector(openURL(_:)), with: url) != nil
+            }
+            responder = responder?.next
+        }
+        return false
+    }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -35,9 +54,9 @@ final class ShareViewController: UIViewController {
     }
 
     private func handleIncomingItems() {
-        
+
         print(extensionContext)
-        
+
         guard let extensionItems = extensionContext?.inputItems as? [NSExtensionItem] else {
             finishWithFailure()
             return
@@ -52,19 +71,24 @@ final class ShareViewController: UIViewController {
             // Important : on doit effectuer l’appel sur le thread principal
             DispatchQueue.main.async {
                 print(url)
+
+                /*
                 self.extensionContext?.open(/*url*/URL("https://www.x.org")!, completionHandler: { success in
                     if success {
                         self.extensionContext?.completeRequest(returningItems: nil)
                     } else {
                         self.finishWithFailure()
                     }
-                })
+                }
+                )*/
             }
         }
     }
 
-    private func extractFirstURL(from items: [NSExtensionItem],
-                                 completion: @escaping (URL?) -> Void) {
+    private func extractFirstURL(
+        from items: [NSExtensionItem],
+        completion: @escaping (URL?) -> Void
+    ) {
 
         let group = DispatchGroup()
         var foundURL: URL?
@@ -74,7 +98,7 @@ final class ShareViewController: UIViewController {
 
             let foo = providers.first!
             print(foo)
-            
+
             for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
 
                 /*
@@ -83,34 +107,51 @@ final class ShareViewController: UIViewController {
                 } else {
                     guard provider.hasItemConformingToTypeIdentifier(kUTTypeURL as String) else { continue }
                 }*/
-                
-                
-                group.enter()
-                provider.loadItem(forTypeIdentifier: UTType.plainText.identifier as String, options: nil) { (item, error) in
-                    defer { group.leave() }
 
-                    print(item)
-                    /*
-                    if let url = item as? URL {
-                        foundURL = url
-                    } else if let data = item as? Data,
-                              let url = URL(dataRepresentation: data, relativeTo: nil) {
-                        foundURL = url
-                    }*/
+                group.enter()
+
+                print(provider)
+
+                provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { (item, error) in
+                    // May be run in a background thread
+
+                    if let error {
+                        print("ERROR: \(error)")
+                    } else {
+                        print("NO ERROR")
+                    }
+
+                    defer { group.leave() }
+                    if let item {
+                        guard let url = URL(string: "openinsafari://share") else { return }
+                        logger.error("avant ouverture")
+                        self.extensionContext?.open(
+                            url,
+                            completionHandler: { success in
+                                print("Ouverture de l'URL : \(success)")
+                                logger.error("après ouverture")
+                            }
+                        )
+                        print("item: \(item)")
+                    }
                 }
+
             }
 
         }
 
         group.notify(queue: .main) {
+            print("group.notify()")
             completion(foundURL)
         }
     }
 
     private func finishWithFailure() {
-        let error = NSError(domain: "OpenInSafariExtension",
-                            code: 1,
-                            userInfo: [NSLocalizedDescriptionKey: "Impossible de récupérer l’URL."])
+        let error = NSError(
+            domain: "OpenInSafariExtension",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Impossible de récupérer l’URL."]
+        )
         extensionContext?.cancelRequest(withError: error)
     }
 }
